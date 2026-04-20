@@ -21,13 +21,25 @@
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.juanann99.reparaelecapp"
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
       "expo-secure-store"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "bff33b56-4af1-44c9-b5b3-0c30e7f3450c"
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/bff33b56-4af1-44c9-b5b3-0c30e7f3450c"
+    }
   }
 }

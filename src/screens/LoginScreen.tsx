@@ -11,8 +11,12 @@ import {
   View,
 } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
+import * as api from '../services/api';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
+import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '../ThemeContext';
+import { AppColors } from '../theme';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Login'>;
@@ -22,6 +26,8 @@ export default function LoginScreen({ navigation }: Props) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const { isDark, toggleTheme, colors } = useTheme();
+  const styles = makeStyles(colors);
 
   async function handleLogin() {
     if (!email.trim() || !password.trim()) {
@@ -31,29 +37,11 @@ export default function LoginScreen({ navigation }: Props) {
 
     setLoading(true);
     try {
-      const response = await fetch('https://api.reparaelec.servidortigres.com/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ email: email.trim(), password }),
-      });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        Alert.alert('Error', data.message ?? 'Credenciales incorrectas.');
-        return;
-      }
-
-      const token = data.token ?? data.access_token;
-      if (!token) {
-        Alert.alert('Error', 'No se recibió token del servidor.');
-        return;
-      }
-
+      const token = await api.login(email.trim(), password);
       await SecureStore.setItemAsync('token', token);
       navigation.replace('Chat');
-    } catch {
-      Alert.alert('Error de red', 'No se pudo conectar con el servidor.');
+    } catch (err) {
+      Alert.alert('Error', err instanceof Error ? err.message : 'No se pudo conectar con el servidor.');
     } finally {
       setLoading(false);
     }
@@ -64,6 +52,10 @@ export default function LoginScreen({ navigation }: Props) {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
+      <TouchableOpacity style={styles.themeToggle} onPress={toggleTheme} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+        <Ionicons name={isDark ? 'sunny-outline' : 'moon-outline'} size={24} color={colors.textSecondary} />
+      </TouchableOpacity>
+
       <View style={styles.card}>
         <Text style={styles.title}>ReparaElec</Text>
         <Text style={styles.subtitle}>Inicia sesión para continuar</Text>
@@ -71,7 +63,7 @@ export default function LoginScreen({ navigation }: Props) {
         <TextInput
           style={styles.input}
           placeholder="Email"
-          placeholderTextColor="#9ca3af"
+          placeholderTextColor={colors.placeholder}
           autoCapitalize="none"
           keyboardType="email-address"
           returnKeyType="next"
@@ -82,7 +74,7 @@ export default function LoginScreen({ navigation }: Props) {
         <TextInput
           style={styles.input}
           placeholder="Contraseña"
-          placeholderTextColor="#9ca3af"
+          placeholderTextColor={colors.placeholder}
           secureTextEntry
           returnKeyType="done"
           onSubmitEditing={handleLogin}
@@ -106,63 +98,70 @@ export default function LoginScreen({ navigation }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#f3f4f6',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 24,
-  },
-  card: {
-    width: '100%',
-    maxWidth: 440,
-    backgroundColor: '#fff',
-    borderRadius: 16,
-    padding: 32,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#111827',
-    marginBottom: 4,
-    textAlign: 'center',
-  },
-  subtitle: {
-    fontSize: 15,
-    color: '#6b7280',
-    marginBottom: 28,
-    textAlign: 'center',
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 10,
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    fontSize: 16,
-    color: '#111827',
-    marginBottom: 16,
-    backgroundColor: '#f9fafb',
-  },
-  button: {
-    backgroundColor: '#2563eb',
-    borderRadius: 10,
-    paddingVertical: 16,
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  buttonDisabled: {
-    backgroundColor: '#93c5fd',
-  },
-  buttonText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-});
+function makeStyles(colors: AppColors) {
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      backgroundColor: colors.background,
+      justifyContent: 'center',
+      alignItems: 'center',
+      padding: 24,
+    },
+    themeToggle: {
+      position: 'absolute',
+      top: 52,
+      right: 24,
+    },
+    card: {
+      width: '100%',
+      maxWidth: 440,
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      padding: 32,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.08,
+      shadowRadius: 8,
+      elevation: 4,
+    },
+    title: {
+      fontSize: 28,
+      fontWeight: '700',
+      color: colors.textPrimary,
+      marginBottom: 4,
+      textAlign: 'center',
+    },
+    subtitle: {
+      fontSize: 15,
+      color: colors.textSecondary,
+      marginBottom: 28,
+      textAlign: 'center',
+    },
+    input: {
+      borderWidth: 1,
+      borderColor: colors.inputBorder,
+      borderRadius: 10,
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+      fontSize: 16,
+      color: colors.inputText,
+      marginBottom: 16,
+      backgroundColor: colors.inputBg,
+    },
+    button: {
+      backgroundColor: colors.buttonBg,
+      borderRadius: 10,
+      paddingVertical: 16,
+      alignItems: 'center',
+      marginTop: 4,
+    },
+    buttonDisabled: {
+      backgroundColor: colors.buttonDisabled,
+    },
+    buttonText: {
+      color: colors.buttonText,
+      fontSize: 16,
+      fontWeight: '600',
+    },
+  });
+}
