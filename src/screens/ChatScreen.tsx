@@ -9,9 +9,11 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -19,7 +21,7 @@ import { StatusBar } from 'expo-status-bar';
 import * as Clipboard from 'expo-clipboard';
 import * as SecureStore from 'expo-secure-store';
 import * as api from '../services/api';
-import { Category, Suggestion } from '../services/api';
+import { Category, ChatStreamBody, Suggestion } from '../services/api';
 import { Ionicons } from '@expo/vector-icons';
 import Markdown from 'react-native-markdown-display';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -51,6 +53,7 @@ export default function ChatScreen({ navigation, route }: Props) {
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [advanced, setAdvanced] = useState(false);
+  const [responseLength, setResponseLength] = useState<'short' | 'normal' | 'detailed'>('normal');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [showCopyToast, setShowCopyToast] = useState(false);
   const copyToastOpacity = useRef(new Animated.Value(0)).current;
@@ -64,6 +67,8 @@ export default function ChatScreen({ navigation, route }: Props) {
   const [suggestionsError, setSuggestionsError] = useState(false);
 
   const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [popoverVisible, setPopoverVisible] = useState(false);
+
   const { isDark, toggleTheme, colors } = useTheme();
   const insets = useSafeAreaInsets();
   const styles = makeStyles(colors);
@@ -189,10 +194,11 @@ export default function ChatScreen({ navigation, route }: Props) {
     setInput('');
     setStreaming(true);
 
-    const body: Record<string, unknown> = { question: text };
+    const body: ChatStreamBody = { question: text };
     if (selectedCategory !== 'all') body.category_ids = [selectedCategory];
     if (advanced) body.advanced = true;
     if (currentSessionId) body.session_id = currentSessionId;
+    if (responseLength !== 'normal') body.response_length = responseLength;
 
     const { xhr, send } = await api.buildChatStreamXhr(body);
     xhrRef.current = xhr;
@@ -446,15 +452,48 @@ export default function ChatScreen({ navigation, route }: Props) {
 
         {/* Barra de entrada */}
         <View style={styles.inputBarOuter}>
+          {popoverVisible && (
+            <View style={styles.popoverCard}>
+              <View style={styles.popoverRow}>
+                <Ionicons name="sparkles-outline" size={18} color={colors.textSecondary} />
+                <Text style={styles.popoverLabel}>Modo avanzado</Text>
+                <Switch
+                  value={advanced}
+                  onValueChange={setAdvanced}
+                  trackColor={{ false: colors.inputBorder, true: colors.buttonBg }}
+                  thumbColor="#fff"
+                />
+              </View>
+              <View style={styles.popoverDivider} />
+              <View style={styles.popoverRow}>
+                <Ionicons name="resize-outline" size={18} color={colors.textSecondary} />
+                <Text style={styles.popoverLabel}>Longitud</Text>
+              </View>
+              {(['short', 'normal', 'detailed'] as const).map(opt => {
+                const label = opt === 'short' ? 'Corta' : opt === 'normal' ? 'Normal' : 'Detallada';
+                const active = responseLength === opt;
+                return (
+                  <TouchableOpacity
+                    key={opt}
+                    style={styles.lengthOption}
+                    onPress={() => { setResponseLength(opt); setPopoverVisible(false); }}
+                  >
+                    <Text style={[styles.lengthOptionText, active && styles.lengthOptionTextActive]}>{label}</Text>
+                    {active && <Ionicons name="checkmark" size={18} color={colors.buttonBg} />}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
           <View style={styles.inputBar}>
             <TouchableOpacity
-              style={[styles.advancedBtn, advanced && styles.advancedBtnActive]}
-              onPress={() => setAdvanced(v => !v)}
+              style={styles.plusBtn}
+              onPress={() => setPopoverVisible(v => !v)}
             >
               <Ionicons
-                name="flash-outline"
-                size={20}
-                color={advanced ? '#2563eb' : colors.textSecondary}
+                name={advanced || responseLength !== 'normal' ? 'add-circle' : 'add-circle-outline'}
+                size={24}
+                color={advanced || responseLength !== 'normal' ? colors.buttonBg : colors.textSecondary}
               />
             </TouchableOpacity>
 
@@ -487,6 +526,13 @@ export default function ChatScreen({ navigation, route }: Props) {
           {!keyboardVisible && <View style={{ height: insets.bottom }} />}
         </View>
       </KeyboardAvoidingView>
+
+      {/* Overlay para cerrar el popover al tocar fuera */}
+      {popoverVisible && (
+        <TouchableWithoutFeedback onPress={() => setPopoverVisible(false)}>
+          <View style={styles.popoverOverlay} />
+        </TouchableWithoutFeedback>
+      )}
 
       {/* Toast de copiado */}
       {showCopyToast && (
@@ -567,12 +613,60 @@ function makeStyles(colors: AppColors) {
       gap: 8,
       minHeight: 56,
     },
-    advancedBtn: {
-      width: 36, height: 36, borderRadius: 10,
-      borderWidth: 1, borderColor: colors.inputBorder, backgroundColor: colors.background,
-      alignSelf: 'center', alignItems: 'center', justifyContent: 'center',
+    plusBtn: {
+      width: 36, height: 36, borderRadius: 18,
+      alignItems: 'center', justifyContent: 'center',
     },
-    advancedBtnActive: { backgroundColor: colors.accentSurface, borderColor: '#2563eb' },
+    popoverOverlay: {
+      position: 'absolute',
+      top: 0, left: 0, right: 0, bottom: 0,
+      zIndex: 9,
+    },
+    popoverCard: {
+      position: 'absolute',
+      bottom: '100%',
+      left: 12,
+      marginBottom: 6,
+      minWidth: 220,
+      backgroundColor: colors.card,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      borderRadius: 12,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.15,
+      shadowRadius: 12,
+      elevation: 8,
+      borderWidth: 1,
+      borderColor: colors.border,
+      zIndex: 10,
+      gap: 10,
+    },
+    popoverRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+    },
+    popoverDivider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: colors.border,
+    },
+    popoverLabel: { flex: 1, fontSize: 15, color: colors.textPrimary, fontWeight: '500' },
+    lengthOption: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      paddingVertical: 6,
+      paddingLeft: 28,
+    },
+    lengthOptionText: {
+      fontSize: 15,
+      color: colors.textSecondary,
+    },
+    lengthOptionTextActive: {
+      color: colors.textPrimary,
+      fontWeight: '600',
+    },
     input: {
       flex: 1, minHeight: 44, maxHeight: 120,
       backgroundColor: colors.inputBg, borderWidth: 1, borderColor: colors.inputBorder,

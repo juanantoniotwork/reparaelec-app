@@ -149,10 +149,26 @@ Payload del chat en streaming:
 
 ## Pendiente
 
-- [ ] UI de feedback 👍👎 en las respuestas del chat
-- [ ] Ajuste de padding/teclado en Android (sin barra de gestos) e iOS (`KeyboardAvoidingView`)
+### Funcional
+
+- [ ] Sesión persistente al arrancar — la app no comprueba si hay un token válido; siempre empieza en Login
+- [ ] Guardar el `session_id` devuelto por el backend en la primera interacción para que mensajes sucesivos se agrupen correctamente
+- [ ] Corregir tipado en HistoryScreen — `item.session_id` puede ser `undefined` pero se pasa a `deleteSession(id: number)` sin comprobación (TS2345)
+- [ ] Paginación en historial e interacciones de sesión para soportar volúmenes altos de datos
+
+### UI/UX
+
+- [ ] Animación de entrada/salida en el popover del modo avanzado
+- [ ] Scroll automático solo al recibir mensajes nuevos (actualmente `onContentSizeChange` hace scroll en cada render)
+- [ ] Accesibilidad — `accessibilityLabel` y `accessibilityRole` en elementos interactivos
 - [ ] Publicación en TestFlight (iOS)
-- [ ] Notificaciones push para consultas de larga duración
+
+### Técnico
+
+- [ ] Manejo de errores en SSE — si la conexión se corta a mitad de stream, el mensaje parcial queda sin indicación de error
+- [ ] Botón para cancelar una respuesta en curso (el `xhrRef` está preparado pero no se usa desde la UI)
+- [ ] Tests unitarios y de integración
+- [ ] Pipeline de CI/CD
 
 ---
 

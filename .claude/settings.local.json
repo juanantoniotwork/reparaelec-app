@@ -4,7 +4,8 @@
       "Bash(npx expo:*)",
       "Bash(npm install:*)",
       "Bash(npm uninstall *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(ls *)"
     ]
   }
 }

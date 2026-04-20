@@ -118,8 +118,16 @@ export async function sendFeedback(
 // Devuelve el XHR configurado y una función send() para que el llamador pueda
 // registrar onprogress/onload/onerror antes de disparar la petición.
 
+export type ChatStreamBody = {
+  question: string;
+  category_ids?: (string | number)[];
+  advanced?: boolean;
+  session_id?: number;
+  response_length?: 'short' | 'normal' | 'detailed';
+};
+
 export async function buildChatStreamXhr(
-  body: Record<string, unknown>
+  body: ChatStreamBody
 ): Promise<{ xhr: XMLHttpRequest; send: () => void }> {
   const token = await SecureStore.getItemAsync('token');
   const xhr = new XMLHttpRequest();
