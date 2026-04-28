@@ -11,6 +11,7 @@ import {
   View,
 } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from '../services/api';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../App';
@@ -37,9 +38,10 @@ export default function LoginScreen({ navigation }: Props) {
 
     setLoading(true);
     try {
-      const token = await api.login(email.trim(), password);
+      const { token, name } = await api.login(email.trim(), password);
       await SecureStore.setItemAsync('token', token);
-      navigation.replace('Chat');
+      if (name) await AsyncStorage.setItem('userName', name);
+      navigation.replace('CategorySelect');
     } catch (err) {
       Alert.alert('Error', err instanceof Error ? err.message : 'No se pudo conectar con el servidor.');
     } finally {

@@ -7,13 +7,10 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Platform,
-  ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   View,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -21,7 +18,7 @@ import { StatusBar } from 'expo-status-bar';
 import * as Clipboard from 'expo-clipboard';
 import * as SecureStore from 'expo-secure-store';
 import * as api from '../services/api';
-import { Category, ChatStreamBody, Suggestion } from '../services/api';
+import { ChatStreamBody } from '../services/api';
 import { Ionicons } from '@expo/vector-icons';
 import Markdown from 'react-native-markdown-display';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -29,6 +26,7 @@ import { RouteProp } from '@react-navigation/native';
 import { RootStackParamList } from '../../App';
 import { useTheme } from '../ThemeContext';
 import { AppColors } from '../theme';
+import LogoIcon from '../components/LogoIcon';
 
 type Props = {
   navigation: NativeStackNavigationProp<RootStackParamList, 'Chat'>;
@@ -40,14 +38,37 @@ type Message = {
   role: 'user' | 'assistant';
   content: string;
   interactionId?: number;
+  timestamp?: number;
 };
 
-const ALL_CATEGORY: Category = { id: 'all', name: 'Todos' };
+function formatTime(ts: number): string {
+  const d = new Date(ts);
+  const hh = d.getHours().toString().padStart(2, '0');
+  const mm = d.getMinutes().toString().padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function formatDaySeparator(ts: number): string {
+  const d = new Date(ts);
+  const now = new Date();
+  const time = formatTime(ts);
+  if (d.toDateString() === now.toDateString()) return `HOY · ${time}`;
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === yesterday.toDateString()) return `AYER · ${time}`;
+  const date = d.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  return `${date} · ${time}`;
+}
 
 export default function ChatScreen({ navigation, route }: Props) {
   const [currentSessionId, setCurrentSessionId] = useState<number | null>(
     route?.params?.sessionId ?? null
   );
+
+  const subcategoryId = route?.params?.subcategoryId;
+  const brandId = route?.params?.brandId;
+  const subcategoryName = route?.params?.subcategoryName;
+  const brandName = route?.params?.brandName;
 
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -59,15 +80,7 @@ export default function ChatScreen({ navigation, route }: Props) {
   const copyToastOpacity = useRef(new Animated.Value(0)).current;
   const [feedbackSent, setFeedbackSent] = useState<Record<string, 'positive' | 'negative'>>({});
 
-  const [categories, setCategories] = useState<Category[]>([ALL_CATEGORY]);
-  const [selectedCategory, setSelectedCategory] = useState<string | number>('all');
-
-  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
-  const [loadingSuggestions, setLoadingSuggestions] = useState(true);
-  const [suggestionsError, setSuggestionsError] = useState(false);
-
   const [keyboardVisible, setKeyboardVisible] = useState(false);
-  const [popoverVisible, setPopoverVisible] = useState(false);
 
   const { isDark, toggleTheme, colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -81,46 +94,18 @@ export default function ChatScreen({ navigation, route }: Props) {
   // ── Carga inicial ──────────────────────────────────────────────────────────
 
   useEffect(() => {
-    async function loadInitialData() {
-      setSuggestionsError(false);
-      const [catRes, sugRes] = await Promise.allSettled([
-        api.fetchCategories(),
-        api.fetchSuggestions(),
-      ]);
-
-      if (catRes.status === 'fulfilled') {
-        setCategories([ALL_CATEGORY, ...catRes.value]);
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const showSub = Keyboard.addListener(showEvent, () => setKeyboardVisible(true));
+    const hideSub = Keyboard.addListener(hideEvent, () => setKeyboardVisible(false));
+    const didShowSub = Keyboard.addListener('keyboardDidShow', () => {
+      listRef.current?.scrollToEnd({ animated: true });
+      if (Platform.OS === 'android') {
+        setTimeout(() => listRef.current?.scrollToEnd({ animated: false }), 120);
       }
-      if (sugRes.status === 'fulfilled') {
-        setSuggestions(sugRes.value);
-      } else {
-        setSuggestionsError(true);
-      }
-
-      setLoadingSuggestions(false);
-    }
-
-    loadInitialData();
+    });
+    return () => { showSub.remove(); hideSub.remove(); didShowSub.remove(); };
   }, []);
-
-  useEffect(() => {
-    const showSub = Keyboard.addListener('keyboardWillShow', () => setKeyboardVisible(true));
-    const hideSub = Keyboard.addListener('keyboardWillHide', () => setKeyboardVisible(false));
-    return () => { showSub.remove(); hideSub.remove(); };
-  }, []);
-
-  async function handleRetrySuggestions() {
-    setSuggestionsError(false);
-    setLoadingSuggestions(true);
-    try {
-      const list = await api.fetchSuggestions();
-      setSuggestions(list);
-    } catch {
-      setSuggestionsError(true);
-    } finally {
-      setLoadingSuggestions(false);
-    }
-  }
 
   // ── Cargar historial previo si viene con sessionId ─────────────────────────
 
@@ -131,10 +116,13 @@ export default function ChatScreen({ navigation, route }: Props) {
       try {
         const interactions = await api.fetchInteractions(currentSessionId!);
         interactions.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-        const history: Message[] = interactions.flatMap(i => [
-          { id: `h-user-${i.id}`, role: 'user' as const, content: i.query },
-          { id: `h-assistant-${i.id}`, role: 'assistant' as const, content: i.response, interactionId: i.id },
-        ]);
+        const history: Message[] = interactions.flatMap(i => {
+          const ts = new Date(i.created_at).getTime();
+          return [
+            { id: `h-user-${i.id}`, role: 'user' as const, content: i.query, timestamp: ts },
+            { id: `h-assistant-${i.id}`, role: 'assistant' as const, content: i.response, interactionId: i.id, timestamp: ts },
+          ];
+        });
         setMessages(history);
       } catch {
         // si falla la carga del historial se abre el chat vacío
@@ -154,14 +142,6 @@ export default function ChatScreen({ navigation, route }: Props) {
     }
     await SecureStore.deleteItemAsync('token');
     navigation.replace('Login');
-  }
-
-  // ── Nuevo chat ─────────────────────────────────────────────────────────────
-
-  function handleNewChat() {
-    setMessages([]);
-    setCurrentSessionId(null);
-    setInput('');
   }
 
   // ── Copiar al portapapeles ─────────────────────────────────────────────────
@@ -187,32 +167,48 @@ export default function ChatScreen({ navigation, route }: Props) {
     const text = (overrideText ?? input).trim();
     if (!text || streaming) return;
 
-    const userMsg: Message = { id: Date.now().toString(), role: 'user', content: text };
-    const assistantId = (Date.now() + 1).toString();
+    const now = Date.now();
+    const userMsg: Message = { id: now.toString(), role: 'user', content: text, timestamp: now };
+    const assistantId = (now + 1).toString();
 
-    setMessages(prev => [...prev, userMsg, { id: assistantId, role: 'assistant', content: '' }]);
+    setMessages(prev => [...prev, userMsg, { id: assistantId, role: 'assistant', content: '', timestamp: now }]);
     setInput('');
     setStreaming(true);
 
     const body: ChatStreamBody = { question: text };
-    if (selectedCategory !== 'all') body.category_ids = [selectedCategory];
+    if (subcategoryId != null) body.category_ids = [subcategoryId];
+    if (brandId != null) body.brand_id = brandId;
     if (advanced) body.advanced = true;
     if (currentSessionId) body.session_id = currentSessionId;
     if (responseLength !== 'normal') body.response_length = responseLength;
 
+    console.log('[chat] params entrantes:', JSON.stringify({
+      subcategoryId, brandId, subcategoryName, brandName,
+      subcategoryIdType: typeof subcategoryId,
+      brandIdType: typeof brandId,
+    }));
+    console.log('[chat] payload body:', JSON.stringify(body));
+
     const { xhr, send } = await api.buildChatStreamXhr(body);
     xhrRef.current = xhr;
     let processed = 0;
+    let chunkCount = 0;
 
     xhr.onprogress = () => {
       const chunk = xhr.responseText.slice(processed);
       processed = xhr.responseText.length;
+      console.log('[chat] onprogress — readyState:', xhr.readyState, 'status:', xhr.status, 'bytes:', chunk.length);
+      console.log('[SSE chunk]', chunk);
 
       for (const line of chunk.split('\n')) {
         if (!line.startsWith('data:')) continue;
         const raw = line.slice(5).trim();
-        if (!raw || raw === '[DONE]') continue;
-        console.log('[SSE raw]', raw);
+        if (!raw || raw === '[DONE]') {
+          console.log('[SSE] terminator:', raw || '(empty)');
+          continue;
+        }
+        chunkCount++;
+        console.log('[SSE raw #' + chunkCount + ']', raw);
         try {
           const parsed = JSON.parse(raw);
           const delta: string = parsed.chunk ?? '';
@@ -225,24 +221,33 @@ export default function ChatScreen({ navigation, route }: Props) {
           setMessages(prev =>
             prev.map(m => (m.id === assistantId ? { ...m, content: m.content + delta } : m))
           );
-        } catch {
-          // línea SSE no-JSON, ignorar
+        } catch (err) {
+          console.log('[SSE parse error]', err instanceof Error ? err.message : err, 'raw:', raw);
         }
       }
     };
 
     xhr.onload = () => {
+      console.log('[chat] onload — status:', xhr.status, 'chunks recibidos:', chunkCount, 'responseText length:', xhr.responseText.length);
+      console.log('[chat] onload body[0..200]:', xhr.responseText.slice(0, 200));
+      if (xhr.status >= 400) {
+        console.log('[chat] response body (error):', xhr.responseText.slice(0, 2000));
+      } else if (chunkCount === 0) {
+        console.log('[chat] responseText completo (sin chunks SSE):', xhr.responseText.slice(0, 2000));
+      }
       setStreaming(false);
       xhrRef.current = null;
     };
 
     xhr.onerror = () => {
+      console.log('[chat] onerror — status:', xhr.status, 'readyState:', xhr.readyState, 'responseText:', xhr.responseText.slice(0, 500));
       setStreaming(false);
       xhrRef.current = null;
       Alert.alert('Error de red', 'No se pudo conectar con el servidor.');
     };
 
     send();
+    console.log('[chat] send() invocado');
   }
 
   // ── Feedback ────────────────────────────────────────────────────────────────
@@ -274,61 +279,78 @@ export default function ChatScreen({ navigation, route }: Props) {
       const isStreaming = streaming && isLastAssistant;
       const sentFeedback = feedbackSent[item.id];
 
+      if (isUser) {
+        return (
+          <View style={styles.messageWrap}>
+            <View style={[styles.bubble, styles.bubbleUser]}>
+              <Text style={styles.textUser}>{item.content}</Text>
+            </View>
+            {item.timestamp != null && (
+              <Text style={styles.userTimestamp}>{formatTime(item.timestamp)}</Text>
+            )}
+          </View>
+        );
+      }
+
       return (
-        <View style={[styles.bubble, isUser ? styles.bubbleUser : styles.bubbleAssistant]}>
-          {isUser ? (
-            <Text style={styles.textUser}>{item.content}</Text>
-          ) : showCursor ? (
-            <Text style={styles.textAssistant}>▍</Text>
-          ) : (
-            <>
-              <Markdown style={mdStyles}>{item.content}</Markdown>
-              <View style={styles.messageActions}>
-                <TouchableOpacity
-                  onPress={() => handleCopy(item.id, item.content)}
-                  hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                >
-                  <Ionicons
-                    name="copy-outline"
-                    size={16}
-                    color={isCopied ? '#2563eb' : colors.textSecondary}
-                  />
-                </TouchableOpacity>
-                {!isStreaming && item.interactionId != null && (
-                  <>
-                    <TouchableOpacity
-                      onPress={() => handleFeedback(item.id, item.interactionId!, 'positive')}
-                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                    >
-                      <Ionicons
-                        name="thumbs-up-outline"
-                        size={20}
-                        color={
-                          sentFeedback === 'positive'
-                            ? colors.buttonBg
-                            : isDark ? '#6B7280' : '#9CA3AF'
-                        }
-                      />
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      onPress={() => handleFeedback(item.id, item.interactionId!, 'negative')}
-                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                    >
-                      <Ionicons
-                        name="thumbs-down-outline"
-                        size={20}
-                        color={
-                          sentFeedback === 'negative'
-                            ? colors.buttonBg
-                            : isDark ? '#6B7280' : '#9CA3AF'
-                        }
-                      />
-                    </TouchableOpacity>
-                  </>
-                )}
-              </View>
-            </>
-          )}
+        <View style={styles.messageWrap}>
+          <View style={styles.assistantHeader}>
+            <LogoIcon size={20} />
+            <Text style={styles.assistantLabel}>Asistente técnico</Text>
+          </View>
+          <View style={[styles.bubble, styles.bubbleAssistant]}>
+            {showCursor ? (
+              <Text style={styles.textAssistant}>▍</Text>
+            ) : (
+              <>
+                <Markdown style={mdStyles}>{item.content}</Markdown>
+                <View style={styles.messageActions}>
+                  <TouchableOpacity
+                    onPress={() => handleCopy(item.id, item.content)}
+                    hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                  >
+                    <Ionicons
+                      name="copy-outline"
+                      size={16}
+                      color={isCopied ? '#2563eb' : colors.textSecondary}
+                    />
+                  </TouchableOpacity>
+                  {!isStreaming && item.interactionId != null && (
+                    <>
+                      <TouchableOpacity
+                        onPress={() => handleFeedback(item.id, item.interactionId!, 'positive')}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      >
+                        <Ionicons
+                          name="thumbs-up-outline"
+                          size={20}
+                          color={
+                            sentFeedback === 'positive'
+                              ? colors.buttonBg
+                              : isDark ? '#6B7280' : '#9CA3AF'
+                          }
+                        />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        onPress={() => handleFeedback(item.id, item.interactionId!, 'negative')}
+                        hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                      >
+                        <Ionicons
+                          name="thumbs-down-outline"
+                          size={20}
+                          color={
+                            sentFeedback === 'negative'
+                              ? colors.buttonBg
+                              : isDark ? '#6B7280' : '#9CA3AF'
+                          }
+                        />
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </View>
+              </>
+            )}
+          </View>
         </View>
       );
     },
@@ -337,38 +359,54 @@ export default function ChatScreen({ navigation, route }: Props) {
 
   // ── Pantalla de bienvenida ─────────────────────────────────────────────────
 
+  const contextLabel = subcategoryName && brandName
+    ? `${subcategoryName} ${brandName}`
+    : subcategoryName || brandName || '';
+  const subtitleContext = subcategoryName && brandName
+    ? `${subcategoryName.toLowerCase()} ${brandName}`
+    : contextLabel.toLowerCase() || 'electrodomésticos';
+
+  const suggestions = brandName
+    ? [
+        `Códigos de error habituales en ${brandName}`,
+        `Averías más frecuentes en ${subtitleContext}`,
+        `Diagnóstico: ${subtitleContext} no enciende`,
+        `¿Cómo desmontar un ${subtitleContext}?`,
+      ]
+    : [
+        'Códigos de error habituales',
+        'Averías más frecuentes',
+        'Pasos de diagnóstico inicial',
+        '¿Cómo desmontar el aparato?',
+      ];
+
   const WelcomeScreen = (
     <View style={styles.welcome}>
       <View style={styles.welcomeIcon}>
-        <Text style={styles.welcomeIconText}>🔧</Text>
+        <LogoIcon size={48} />
       </View>
-      <Text style={styles.welcomeTitle}>Hola, soy tu asistente técnico</Text>
-      <Text style={styles.welcomeSubtitle}>
-        Pregúntame sobre averías, códigos de error o procedimientos de reparación de electrodomésticos.
+      <Text style={styles.welcomeTitle}>
+        Hola, soy tu asistente técnico
+        {contextLabel ? ' en' : ''}
+        {contextLabel ? '\n' : ''}
+        {contextLabel ? <Text style={styles.welcomeTitleAccent}>{contextLabel}</Text> : null}
       </Text>
-      {loadingSuggestions ? (
-        <ActivityIndicator color="#2563eb" style={{ marginTop: 24 }} />
-      ) : suggestionsError ? (
-        <View style={styles.suggestionsErrorView}>
-          <Ionicons name="wifi-outline" size={32} color={colors.placeholder} />
-          <Text style={styles.suggestionsErrorText}>Sin conexión. Comprueba tu red.</Text>
-          <TouchableOpacity style={styles.retryBtn} onPress={handleRetrySuggestions}>
-            <Text style={styles.retryBtnText}>Reintentar</Text>
+      <Text style={styles.welcomeSubtitle}>
+        Pregúntame sobre averías, códigos de error o procedimientos de reparación de {subtitleContext}.
+      </Text>
+      <View style={styles.suggestionsBlock}>
+        <Text style={styles.suggestionsLabel}>EJEMPLOS</Text>
+        {suggestions.map((text, i) => (
+          <TouchableOpacity
+            key={i}
+            style={styles.suggestionCard}
+            onPress={() => sendMessage(text)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.suggestionText}>{text}</Text>
           </TouchableOpacity>
-        </View>
-      ) : suggestions.length > 0 ? (
-        <View style={styles.suggestionsGrid}>
-          {suggestions.map((s, i) => (
-            <TouchableOpacity
-              key={i}
-              style={styles.suggestionCard}
-              onPress={() => sendMessage(s.query)}
-            >
-              <Text style={styles.suggestionText}>{s.query}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      ) : null}
+        ))}
+      </View>
     </View>
   );
 
@@ -379,9 +417,26 @@ export default function ChatScreen({ navigation, route }: Props) {
       <StatusBar style={isDark ? 'light' : 'dark'} backgroundColor="transparent" translucent />
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={handleNewChat} activeOpacity={0.6}>
-          <Text style={styles.headerTitle}>ReparaElec</Text>
-        </TouchableOpacity>
+        <View style={styles.headerLeft}>
+          {navigation.canGoBack() ? (
+            <TouchableOpacity
+              onPress={() => navigation.goBack()}
+              style={styles.backBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="chevron-back" size={28} color={colors.buttonBg} />
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity
+            style={styles.headerBrand}
+            onPress={() => navigation.popToTop()}
+            activeOpacity={0.7}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <LogoIcon size={28} />
+            <Text style={styles.brandText}>Reparaelec</Text>
+          </TouchableOpacity>
+        </View>
         <View style={styles.headerActions}>
           <TouchableOpacity onPress={toggleTheme} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
             <Ionicons
@@ -399,104 +454,33 @@ export default function ChatScreen({ navigation, route }: Props) {
         </View>
       </View>
 
-      {/* Filtros de categoría */}
-      <View style={styles.categoriesWrapper}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.categoriesContent}
-        >
-          {categories.map(cat => {
-            const active = cat.id === selectedCategory;
-            return (
-              <TouchableOpacity
-                key={String(cat.id)}
-                style={[styles.categoryChip, active && styles.categoryChipActive]}
-                onPress={() => setSelectedCategory(cat.id)}
-              >
-                <Text style={[styles.categoryChipText, active && styles.categoryChipTextActive]}>
-                  {cat.name}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      </View>
-
       {/* Lista de mensajes + input */}
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={0}
       >
-        <FlatList
-          ref={listRef}
-          data={messages}
-          keyExtractor={m => m.id}
-          renderItem={renderMessage}
-          style={{ flex: 1 }}
-          contentContainerStyle={[styles.messageList, messages.length === 0 && { flexGrow: 1 }]}
-          onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
-          ListEmptyComponent={WelcomeScreen}
-        />
-
-        {/* Botón flotante Nuevo chat — solo visible cuando hay mensajes */}
-        {messages.length > 0 && (
-          <TouchableOpacity
-            style={[styles.fab, { bottom: 10 + 44 + 10 + insets.bottom + 10 }]}
-            onPress={handleNewChat}
-          >
-            <Ionicons name="add-circle-outline" size={32} color={colors.textPrimary} />
-          </TouchableOpacity>
-        )}
+        <View style={{ flex: 1 }}>
+          <FlatList
+            ref={listRef}
+            data={messages}
+            keyExtractor={m => m.id}
+            renderItem={renderMessage}
+            style={{ flex: 1 }}
+            contentContainerStyle={[styles.messageList, messages.length === 0 && { flexGrow: 1 }]}
+            onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
+            ListEmptyComponent={WelcomeScreen}
+            ListHeaderComponent={
+              messages.length > 0 && messages[0].timestamp != null ? (
+                <Text style={styles.daySeparator}>{formatDaySeparator(messages[0].timestamp)}</Text>
+              ) : null
+            }
+          />
+        </View>
 
         {/* Barra de entrada */}
         <View style={styles.inputBarOuter}>
-          {popoverVisible && (
-            <View style={styles.popoverCard}>
-              <View style={styles.popoverRow}>
-                <Ionicons name="sparkles-outline" size={18} color={colors.textSecondary} />
-                <Text style={styles.popoverLabel}>Modo avanzado</Text>
-                <Switch
-                  value={advanced}
-                  onValueChange={setAdvanced}
-                  trackColor={{ false: colors.inputBorder, true: colors.buttonBg }}
-                  thumbColor="#fff"
-                />
-              </View>
-              <View style={styles.popoverDivider} />
-              <View style={styles.popoverRow}>
-                <Ionicons name="resize-outline" size={18} color={colors.textSecondary} />
-                <Text style={styles.popoverLabel}>Longitud</Text>
-              </View>
-              {(['short', 'normal', 'detailed'] as const).map(opt => {
-                const label = opt === 'short' ? 'Corta' : opt === 'normal' ? 'Normal' : 'Detallada';
-                const active = responseLength === opt;
-                return (
-                  <TouchableOpacity
-                    key={opt}
-                    style={styles.lengthOption}
-                    onPress={() => { setResponseLength(opt); setPopoverVisible(false); }}
-                  >
-                    <Text style={[styles.lengthOptionText, active && styles.lengthOptionTextActive]}>{label}</Text>
-                    {active && <Ionicons name="checkmark" size={18} color={colors.buttonBg} />}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          )}
           <View style={styles.inputBar}>
-            <TouchableOpacity
-              style={styles.plusBtn}
-              onPress={() => setPopoverVisible(v => !v)}
-            >
-              <Ionicons
-                name={advanced || responseLength !== 'normal' ? 'add-circle' : 'add-circle-outline'}
-                size={24}
-                color={advanced || responseLength !== 'normal' ? colors.buttonBg : colors.textSecondary}
-              />
-            </TouchableOpacity>
-
             <TextInput
               style={styles.input}
               placeholder="Escribe tu pregunta..."
@@ -527,13 +511,6 @@ export default function ChatScreen({ navigation, route }: Props) {
         </View>
       </KeyboardAvoidingView>
 
-      {/* Overlay para cerrar el popover al tocar fuera */}
-      {popoverVisible && (
-        <TouchableWithoutFeedback onPress={() => setPopoverVisible(false)}>
-          <View style={styles.popoverOverlay} />
-        </TouchableWithoutFeedback>
-      )}
-
       {/* Toast de copiado */}
       {showCopyToast && (
         <Animated.View style={[styles.copyToast, { opacity: copyToastOpacity }]}>
@@ -562,34 +539,23 @@ function makeStyles(colors: AppColors) {
       borderBottomWidth: 1,
       borderBottomColor: colors.border,
     },
-    headerTitle: { fontSize: 20, fontWeight: '700', color: colors.textPrimary },
     headerActions: { flexDirection: 'row', alignItems: 'center', gap: 20 },
-    fab: {
-      position: 'absolute',
-      right: 16,
-      backgroundColor: colors.card,
-      borderWidth: 1,
-      borderColor: colors.border,
-      borderRadius: 24,
-      padding: 8,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.12,
-      shadowRadius: 6,
-      elevation: 4,
-    },
-    categoriesWrapper: { backgroundColor: colors.card, borderBottomWidth: 1, borderBottomColor: colors.border },
-    categoriesContent: { paddingHorizontal: 16, paddingVertical: 10, gap: 8 },
-    categoryChip: {
-      paddingHorizontal: 16, paddingVertical: 7, borderRadius: 20,
-      borderWidth: 1, borderColor: colors.inputBorder, backgroundColor: colors.inputBg,
-    },
-    categoryChipActive: { backgroundColor: '#2563eb', borderColor: '#2563eb' },
-    categoryChipText: { fontSize: 14, fontWeight: '500', color: colors.textPrimary },
-    categoryChipTextActive: { color: '#fff' },
-
+    headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    headerBrand: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    brandText: { fontSize: 18, fontWeight: '700', color: colors.textPrimary },
+    backBtn: { marginLeft: -8 },
     messageList: { padding: 16, paddingBottom: 8 },
-    bubble: { maxWidth: '78%', borderRadius: 16, paddingHorizontal: 16, paddingVertical: 10, marginBottom: 10 },
+    daySeparator: {
+      textAlign: 'center',
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      letterSpacing: 0.5,
+      marginBottom: 16,
+      marginTop: 4,
+    },
+    messageWrap: { marginBottom: 14 },
+    bubble: { maxWidth: '78%', borderRadius: 16, paddingHorizontal: 16, paddingVertical: 10 },
     bubbleUser: { alignSelf: 'flex-end', backgroundColor: '#2563eb', borderBottomRightRadius: 4 },
     bubbleAssistant: {
       alignSelf: 'flex-start', backgroundColor: colors.card, borderBottomLeftRadius: 4,
@@ -597,6 +563,23 @@ function makeStyles(colors: AppColors) {
     },
     textUser: { fontSize: 15, lineHeight: 22, color: '#fff' },
     textAssistant: { fontSize: 15, lineHeight: 22, color: colors.textPrimary },
+    userTimestamp: {
+      alignSelf: 'flex-end',
+      fontSize: 11,
+      color: colors.textSecondary,
+      marginTop: 4,
+      paddingRight: 6,
+      paddingLeft: 2,
+      includeFontPadding: false,
+    },
+    assistantHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      alignSelf: 'flex-start',
+      gap: 8,
+      marginBottom: 6,
+    },
+    assistantLabel: { fontSize: 13, fontWeight: '500', color: colors.textSecondary },
     copyBtn: { alignSelf: 'flex-end', marginTop: 8 },
     messageActions: { flexDirection: 'row', alignSelf: 'flex-end', alignItems: 'center', gap: 12, marginTop: 8 },
 
@@ -613,60 +596,6 @@ function makeStyles(colors: AppColors) {
       gap: 8,
       minHeight: 56,
     },
-    plusBtn: {
-      width: 36, height: 36, borderRadius: 18,
-      alignItems: 'center', justifyContent: 'center',
-    },
-    popoverOverlay: {
-      position: 'absolute',
-      top: 0, left: 0, right: 0, bottom: 0,
-      zIndex: 9,
-    },
-    popoverCard: {
-      position: 'absolute',
-      bottom: '100%',
-      left: 12,
-      marginBottom: 6,
-      minWidth: 220,
-      backgroundColor: colors.card,
-      paddingHorizontal: 14,
-      paddingVertical: 12,
-      borderRadius: 12,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.15,
-      shadowRadius: 12,
-      elevation: 8,
-      borderWidth: 1,
-      borderColor: colors.border,
-      zIndex: 10,
-      gap: 10,
-    },
-    popoverRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 10,
-    },
-    popoverDivider: {
-      height: StyleSheet.hairlineWidth,
-      backgroundColor: colors.border,
-    },
-    popoverLabel: { flex: 1, fontSize: 15, color: colors.textPrimary, fontWeight: '500' },
-    lengthOption: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      justifyContent: 'space-between',
-      paddingVertical: 6,
-      paddingLeft: 28,
-    },
-    lengthOptionText: {
-      fontSize: 15,
-      color: colors.textSecondary,
-    },
-    lengthOptionTextActive: {
-      color: colors.textPrimary,
-      fontWeight: '600',
-    },
     input: {
       flex: 1, minHeight: 44, maxHeight: 120,
       backgroundColor: colors.inputBg, borderWidth: 1, borderColor: colors.inputBorder,
@@ -676,22 +605,33 @@ function makeStyles(colors: AppColors) {
     sendBtnDisabled: { backgroundColor: colors.buttonDisabled },
     sendBtnText: { color: '#fff', fontSize: 20, fontWeight: '700', lineHeight: 24 },
 
-    welcome: { flex: 1, alignItems: 'center', paddingTop: 60, paddingHorizontal: 24 },
-    welcomeIcon: { width: 72, height: 72, borderRadius: 20, backgroundColor: colors.accentSurface, alignItems: 'center', justifyContent: 'center', marginBottom: 20 },
-    welcomeIconText: { fontSize: 36 },
-    welcomeTitle: { fontSize: 22, fontWeight: '700', color: colors.textPrimary, textAlign: 'center', marginBottom: 10 },
+    welcome: { flex: 1, alignItems: 'center', paddingTop: 40, paddingHorizontal: 24 },
+    welcomeIcon: { marginBottom: 20 },
+    welcomeTitle: { fontSize: 22, fontWeight: '700', color: colors.textPrimary, textAlign: 'center', marginBottom: 10, lineHeight: 30 },
+    welcomeTitleAccent: { color: colors.buttonBg },
     welcomeSubtitle: { fontSize: 15, color: colors.textSecondary, textAlign: 'center', lineHeight: 22, maxWidth: 480 },
-    suggestionsGrid: { marginTop: 32, width: '100%', flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'center' },
+    suggestionsBlock: { marginTop: 32, width: '100%', alignSelf: 'stretch', gap: 8 },
+    suggestionsLabel: {
+      fontSize: 12,
+      fontWeight: '600',
+      color: colors.textSecondary,
+      letterSpacing: 1,
+      marginBottom: 4,
+    },
     suggestionCard: {
-      backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border,
-      borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, maxWidth: '47%',
-      shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 3, elevation: 1,
+      backgroundColor: colors.card,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: 12,
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+      shadowColor: '#000',
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.05,
+      shadowRadius: 3,
+      elevation: 1,
     },
     suggestionText: { fontSize: 14, color: colors.textPrimary, lineHeight: 20 },
-    suggestionsErrorView: { marginTop: 32, alignItems: 'center', gap: 8 },
-    suggestionsErrorText: { fontSize: 14, color: colors.textSecondary, textAlign: 'center' },
-    retryBtn: { marginTop: 4, paddingVertical: 8, paddingHorizontal: 24, borderRadius: 8, backgroundColor: '#2563eb' },
-    retryBtnText: { color: '#fff', fontSize: 14, fontWeight: '600' },
 
     copyToast: {
       position: 'absolute',

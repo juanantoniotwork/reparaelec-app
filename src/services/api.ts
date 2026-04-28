@@ -23,6 +23,26 @@ async function authHeaders(): Promise<Record<string, string>> {
 export type Category = {
   id: string | number;
   name: string;
+  parent_id?: string | number | null;
+  children?: Category[];
+};
+
+export type Brand = {
+  id: string | number;
+  name: string;
+};
+
+export type Favorite = {
+  id: number;
+  category_id: string | number;
+  subcategory_id: string | number;
+  brand_id: string | number;
+  category?: Category;
+  subcategory?: Category;
+  brand?: Brand;
+  category_name?: string;
+  subcategory_name?: string;
+  brand_name?: string;
 };
 
 export type Suggestion = {
@@ -40,7 +60,12 @@ export type Interaction = {
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
-export async function login(email: string, password: string): Promise<string> {
+export type LoginResponse = {
+  token: string;
+  name: string;
+};
+
+export async function login(email: string, password: string): Promise<LoginResponse> {
   const res = await safeFetch(`${BASE}/login`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -50,7 +75,8 @@ export async function login(email: string, password: string): Promise<string> {
   if (!res.ok) throw new Error(data.message ?? 'Credenciales incorrectas.');
   const token: string = data.token ?? data.access_token;
   if (!token) throw new Error('No se recibió token del servidor.');
-  return token;
+  const name: string = data.user?.name ?? '';
+  return { token, name };
 }
 
 export async function logout(): Promise<void> {
@@ -66,6 +92,52 @@ export async function fetchCategories(): Promise<Category[]> {
   if (!res.ok) throw new Error('Error al cargar categorías.');
   const data = await res.json();
   return Array.isArray(data) ? data : data.data ?? [];
+}
+
+// ── Brands ────────────────────────────────────────────────────────────────────
+
+export async function getBrandsByCategory(categoryId: string | number): Promise<Brand[]> {
+  const headers = await authHeaders();
+  const res = await safeFetch(`${BASE}/brands?category_id=${categoryId}`, { headers });
+  if (!res.ok) throw new Error('Error al cargar marcas.');
+  const data = await res.json();
+  return Array.isArray(data) ? data : data.data ?? [];
+}
+
+// ── Favorites ─────────────────────────────────────────────────────────────────
+
+export async function getFavorites(): Promise<Favorite[]> {
+  const headers = await authHeaders();
+  const res = await safeFetch(`${BASE}/favorites`, { headers });
+  if (!res.ok) throw new Error('Error al cargar favoritos.');
+  const data = await res.json();
+  return Array.isArray(data) ? data : data.data ?? [];
+}
+
+export async function addFavorite(
+  categoryId: string | number,
+  subcategoryId: string | number,
+  brandId: string | number
+): Promise<Favorite> {
+  const headers = await authHeaders();
+  const res = await safeFetch(`${BASE}/favorites`, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      category_id: categoryId,
+      subcategory_id: subcategoryId,
+      brand_id: brandId,
+    }),
+  });
+  if (!res.ok) throw new Error('No se pudo guardar el favorito.');
+  const data = await res.json();
+  return data.data ?? data;
+}
+
+export async function removeFavorite(id: number): Promise<void> {
+  const headers = await authHeaders();
+  const res = await safeFetch(`${BASE}/favorites/${id}`, { method: 'DELETE', headers });
+  if (!res.ok) throw new Error('No se pudo quitar el favorito.');
 }
 
 // ── Suggestions ───────────────────────────────────────────────────────────────
@@ -121,6 +193,7 @@ export async function sendFeedback(
 export type ChatStreamBody = {
   question: string;
   category_ids?: (string | number)[];
+  brand_id?: string | number;
   advanced?: boolean;
   session_id?: number;
   response_length?: 'short' | 'normal' | 'detailed';
